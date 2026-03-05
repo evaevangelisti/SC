@@ -68,7 +68,7 @@ def main(
     processor: WiktextractProcessor = WiktextractProcessor(
         minimum_year=minimum_year,
         maximum_year=maximum_year,
-        allowed_pos_tags=set(allowed_pos_tags) if allowed_pos_tags else None,
+        allowed_pos_tags=set(allowed_pos_tags) if allowed_pos_tags is not None else None,
     )
 
     if force or not WIKTEXTRACT_PATH.exists():
