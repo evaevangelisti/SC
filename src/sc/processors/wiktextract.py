@@ -11,6 +11,7 @@ from spacy.language import Language
 from spacy.tokens import Doc, Span, Token
 from tqdm import tqdm
 
+from ..config import DEFAULT_BATCH_SIZE
 from ..models import Example, Quotation, Sense, Sentence
 from .base import Processor
 
@@ -39,7 +40,7 @@ class WiktextractProcessor(Processor):
         self._minimum_year: int | None = minimum_year
         self._maximum_year: int | None = maximum_year
 
-        self.allowed_pos_tags: set[str] | None = allowed_pos_tags
+        self._allowed_pos_tags: set[str] | None = allowed_pos_tags
 
         self._nlp: Language = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 
@@ -300,8 +301,7 @@ class WiktextractProcessor(Processor):
     def extract_lemmas(
         self,
         input_path: Path,
-        batch_size: int = 1000,
-        n_process: int = 1,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> list[dict[str, Any]]:
         """
         Extract lemmas and their translations from the Wiktextract JSONL file.
@@ -309,7 +309,6 @@ class WiktextractProcessor(Processor):
         Args:
             input_path (Path): Path to the Wiktextract JSONL file.
             batch_size (int): Number of lines to process in each batch for finding word offsets.
-            n_process (int): Number of processes to use for finding word offsets. If 1, processing will be done sequentially.
 
         Returns:
             list[dict[str, Any]]: List of dictionaries containing lemma information.
@@ -336,8 +335,8 @@ class WiktextractProcessor(Processor):
 
                         pos_tag: str | None = lemma_entry.get("pos")
                         if (
-                            self.allowed_pos_tags is None
-                            or pos_tag in self.allowed_pos_tags
+                            self._allowed_pos_tags is None
+                            or pos_tag in self._allowed_pos_tags
                         ):
                             senses: list[Sense] = self._extract_senses(
                                 lemma_entry.get("senses", []),
@@ -387,12 +386,10 @@ class WiktextractProcessor(Processor):
                 self._nlp.pipe(
                     (sentence.sentence for _, sentence in sentences),
                     batch_size=batch_size,
-                    n_process=n_process,
                 ),
                 self._nlp.pipe(
                     (lemma for lemma, _ in sentences),
                     batch_size=batch_size,
-                    n_process=n_process,
                 ),
                 sentences,
             ),

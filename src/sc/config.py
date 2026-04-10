@@ -5,6 +5,8 @@ from pathlib import Path
 DEFAULT_CHUNK_SIZE: int = 1024 * 1024
 DEFAULT_TIMEOUT: int = 60
 
+DEFAULT_BATCH_SIZE: int = 1000
+
 DEFAULT_BUFFER_SIZE: int = 1024 * 1024
 
 # Paths
