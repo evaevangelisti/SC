@@ -1,6 +1,6 @@
-# SEED
+# SC
 
-**Semantic Evaluation Dataset** — A toolkit for building semantic evaluation datasets from lexical resources.
+**Sentence Collector** — A toolkit for collecting sentences from lexical resources.
 
 ## Installation
 
@@ -25,5 +25,5 @@ pip install -e ".[dev]"
 Run the pipeline with the following command:
 
 ```bash
-seed [options]
+sc [options]
 ```

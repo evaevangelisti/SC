@@ -1,7 +1,7 @@
-seed
-====
+sc
+==
 
 .. toctree::
    :maxdepth: 4
 
-   seed
+   sc

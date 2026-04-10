@@ -24,7 +24,7 @@ WIKTEXTRACT_PATH: Path = INTERIM_DIR / "wiktextract.jsonl"
 
 PROCESSED_DIR: Path = DATA_DIR / "processed"
 
-SEED_PATH: Path = PROCESSED_DIR / "seed.jsonl"
+WIKTIONARY_PATH: Path = PROCESSED_DIR / "wiktionary.jsonl"
 
 # URLs
 

@@ -1,12 +1,5 @@
 import typer
 
-from .config import (
-    DEFAULT_BUFFER_SIZE,
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_MAPPINGS_PATH,
-    DEFAULT_TIMEOUT,
-)
-
 
 def parse_allowed_pos_tags(
     allowed_pos_tags: str | None,
@@ -31,18 +24,6 @@ app: typer.Typer = typer.Typer(add_completion=False)
 
 @app.command()
 def main(
-    force: bool = typer.Option(
-        False,
-        help="Force re-download and re-processing of data",
-    ),
-    chunk_size: int = typer.Option(
-        DEFAULT_CHUNK_SIZE,
-        help="Chunk size in bytes",
-    ),
-    timeout: int = typer.Option(
-        DEFAULT_TIMEOUT,
-        help="Request timeout in seconds",
-    ),
     minimum_year: int | None = typer.Option(
         None,
         help="Minimum year",
@@ -56,21 +37,13 @@ def main(
         help="Allowed POS tags",
         callback=parse_allowed_pos_tags,
     ),
-    batch_size: int = typer.Option(
-        1000,
-        help="Batch size for processing data",
-    ),
-    n_process: int = typer.Option(
-        1,
-        help="Number of processes to use for processing data",
-    ),
-    buffer_size: int = typer.Option(
-        DEFAULT_BUFFER_SIZE,
-        help="Buffer size in bytes",
+    force: bool = typer.Option(
+        False,
+        help="Force re-download and re-processing of data",
     ),
 ) -> None:
     from .config import COMPRESSED_WIKTEXTRACT_PATH, WIKTEXTRACT_URL
-    from .core import Downloader
+    from .downloader import Downloader
 
     downloader: Downloader = Downloader(
         WIKTEXTRACT_URL,
@@ -79,8 +52,6 @@ def main(
 
     downloaded: bool = downloader.download(
         force_download=force,
-        chunk_size=chunk_size,
-        timeout=timeout,
     )
 
     if downloaded:
@@ -88,8 +59,9 @@ def main(
     else:
         typer.echo(f"Wiktextract data already exists at {COMPRESSED_WIKTEXTRACT_PATH}")
 
-    from .config import SEED_PATH, WIKTEXTRACT_PATH
-    from .core import ExporterFactory, WiktextractProcessor
+    from .config import WIKTEXTRACT_PATH
+    from .exporters import ExporterFactory
+    from .processors import WiktextractProcessor
 
     processor: WiktextractProcessor = WiktextractProcessor(
         minimum_year=minimum_year,
@@ -104,24 +76,22 @@ def main(
         exporter.export(
             processor.extract_lemmas(
                 COMPRESSED_WIKTEXTRACT_PATH,
-                batch_size=batch_size,
-                n_process=n_process,
             ),
-            buffer_size=buffer_size,
         )
 
         typer.echo(f"Saved processed data to {WIKTEXTRACT_PATH}")
     else:
         typer.echo(f"Processed data already exists at {WIKTEXTRACT_PATH}")
 
+    from .config import DEFAULT_MAPPINGS_PATH, WIKTIONARY_PATH
+
     if DEFAULT_MAPPINGS_PATH.exists():
-        exporter, _ = ExporterFactory.create(SEED_PATH)
+        exporter, _ = ExporterFactory.create(WIKTIONARY_PATH)
         exporter.export(
             processor.associate_translations(WIKTEXTRACT_PATH, DEFAULT_MAPPINGS_PATH),
-            buffer_size=buffer_size,
         )
 
-        typer.echo(f"Saved SEED data to {SEED_PATH}")
+        typer.echo(f"Saved SEED data to {WIKTIONARY_PATH}")
     else:
         typer.echo(
             f"Mappings file not found at {DEFAULT_MAPPINGS_PATH}, skipping association of translations"
