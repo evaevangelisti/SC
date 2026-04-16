@@ -1,6 +1,6 @@
 # SC
 
-**Sentence Collector** — A toolkit for collecting sentences from lexical resources.
+**Sentence Collector** — A toolkit for collecting sentences from lexical resources (currently only Wiktionary).
 
 ## Installation
 
