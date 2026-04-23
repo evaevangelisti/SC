@@ -4,15 +4,15 @@ import re
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import spacy
 from spacy.language import Language
 from spacy.tokens import Doc, Span, Token
 from tqdm import tqdm
 
-from ..config import DEFAULT_BATCH_SIZE
-from ..models import Example, Quotation, Sense, Sentence
+from ..config import DEFAULT_BATCH_SIZE, DEFAULT_N_PROCESS
+from ..models import POS, Example, Quotation, Sentence, WiktionarySense
 from .base import Processor
 
 
@@ -25,27 +25,33 @@ class WiktextractProcessor(Processor):
 
     def __init__(
         self,
+        input_path: Path,
         minimum_year: int | None = None,
         maximum_year: int | None = None,
-        allowed_pos_tags: set[str] | None = None,
+        allowed_pos_tags: set[POS] | None = None,
     ):
         """
         Initialize the Wiktextract processor.
 
         Args:
+            input_path (Path): Path to the Wiktextract JSONL file containing lemmas and senses.
             minimum_year (int | None): Minimum year for filtering example sentences. If None, no minimum year filter is applied.
             maximum_year (int | None): Maximum year for filtering example sentences. If None, no maximum year filter is applied.
-            allowed_pos_tags (set[str] | None): Set of allowed part-of-speech tags. If None, all POS tags are allowed.
+            allowed_pos_tags (set[POS] | None): Set of allowed part-of-speech tags. If None, all POS tags are allowed.
         """
+        self._input_path: Path = input_path
+
         self._minimum_year: int | None = minimum_year
         self._maximum_year: int | None = maximum_year
 
-        self._allowed_pos_tags: set[str] | None = allowed_pos_tags
+        self._allowed_pos_tags: set[POS] | None = allowed_pos_tags
 
+        self._records: dict[str, dict[str, Any]] | None = None
         self._nlp: Language = spacy.load("en_core_web_sm", disable=["ner", "parser"])
 
+    @classmethod
     def _extract_year(
-        self,
+        cls,
         string: str,
     ) -> int | None:
         """
@@ -60,7 +66,7 @@ class WiktextractProcessor(Processor):
         if not string:
             return None
 
-        year_match: re.Match | None = self._YEAR_PATTERN.search(string)
+        year_match: re.Match | None = cls._YEAR_PATTERN.search(string)
         if not year_match:
             return None
 
@@ -126,7 +132,7 @@ class WiktextractProcessor(Processor):
     def _extract_senses(
         self,
         raw_senses: list[dict[str, Any]],
-    ) -> list[Sense]:
+    ) -> list[WiktionarySense]:
         """
         Extract senses from a Wiktextract entry.
 
@@ -136,7 +142,7 @@ class WiktextractProcessor(Processor):
         Returns:
             list[Sense]: List of extracted Sense objects.
         """
-        senses: list[Sense] = []
+        senses: list[WiktionarySense] = []
 
         for i, sense in enumerate(raw_senses, start=1):
             glosses: list[str] = sense.get("glosses", [])
@@ -150,7 +156,7 @@ class WiktextractProcessor(Processor):
                     )
 
                     senses.append(
-                        Sense(
+                        WiktionarySense(
                             sense_order=i,
                             definition=definition,
                             sentences=sentences,
@@ -213,7 +219,7 @@ class WiktextractProcessor(Processor):
             record (dict[str, Any]): The new lemma record to merge from.
         """
         for i, sense in enumerate(record["senses"]):
-            existing_sense: Sense = existing_record["senses"][i]
+            existing_sense: WiktionarySense = existing_record["senses"][i]
 
             existing_sentences: set[str] = {
                 sentence.sentence for sentence in existing_sense.sentences
@@ -247,6 +253,89 @@ class WiktextractProcessor(Processor):
                                 existing_record["translations"][definition][
                                     language
                                 ].append(translation)
+
+    def _extract_records(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Extract lemmas, their parts of speech, senses, and translations from the Wiktextract JSONL file.
+
+        Returns:
+            dict[str, dict[str, Any]]: A dictionary mapping unique record IDs to their corresponding lemma, part of speech, senses, and translations.
+        """
+        if self._records is not None:
+            return self._records
+
+        self._records = {}
+
+        with (
+            gzip.open(self._input_path, "rt", encoding="utf-8") as file,
+            tqdm(
+                desc="Extracting",
+                unit=" lines",
+            ) as pbar,
+        ):
+            for line in file:
+                lemma_entry: dict[str, Any] = json.loads(line)
+
+                language: str | None = lemma_entry.get(
+                    "lang_code",
+                ) or lemma_entry.get(
+                    "lang",
+                )
+                if language and language.lower() in ("en", "english"):
+                    lemma: str | None = lemma_entry.get("word")
+                    if lemma:
+                        lemma = lemma.strip()
+
+                        pos_tag: POS | None = POS.from_wiktionary(
+                            lemma_entry.get(
+                                "pos",
+                                "",
+                            ),
+                        )
+                        if pos_tag is not None and (
+                            self._allowed_pos_tags is None
+                            or pos_tag in self._allowed_pos_tags
+                        ):
+                            senses: list[WiktionarySense] = self._extract_senses(
+                                lemma_entry.get(
+                                    "senses",
+                                    [],
+                                ),
+                            )
+                            if senses and any(sense.sentences for sense in senses):
+                                record_id: str = str(
+                                    uuid.uuid5(
+                                        uuid.NAMESPACE_DNS,
+                                        f"{lemma}|{pos_tag}|{'|'.join(sense.definition.lower() for sense in [sense for sense in senses if sense.sentences])}",
+                                    )
+                                )
+
+                                translations: dict[str, dict[str, list[str]]] = (
+                                    self._extract_translations(
+                                        lemma_entry.get("translations", []),
+                                    )
+                                )
+
+                                record: dict[str, Any] = {
+                                    "lemma": lemma,
+                                    "pos": pos_tag.value,
+                                    "senses": senses,
+                                    "translations": translations,
+                                }
+
+                                if record_id in self._records:
+                                    self._merge_records(
+                                        self._records[record_id],
+                                        record,
+                                    )
+                                else:
+                                    self._records[record_id] = record
+
+                pbar.update(1)
+
+        return self._records
 
     def _find_word_offsets(
         self,
@@ -299,99 +388,58 @@ class WiktextractProcessor(Processor):
 
     def extract_lemmas(
         self,
-        input_path: Path,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        n_process: int = DEFAULT_N_PROCESS,
     ) -> list[dict[str, Any]]:
         """
-        Extract lemmas and their translations from the Wiktextract JSONL file.
+        Extract lemmas, their parts of speech, senses, and translations from the Wiktextract JSONL file, and find offsets of the lemma in the example sentences.
 
         Args:
-            input_path (Path): Path to the Wiktextract JSONL file.
-            batch_size (int): Number of lines to process in each batch for finding word offsets.
+            batch_size (int): The batch size to use for processing sentences with spaCy. Defaults to DEFAULT_BATCH_SIZE.
+            n_process (int): The number of processes to use for parallel processing with spaCy. Defaults to DEFAULT_N_PROCESS.
 
         Returns:
-            list[dict[str, Any]]: List of dictionaries containing lemma information.
+            list[dict[str, Any]]: A list of dictionaries, each containing a lemma, its part of speech, a list of its senses (definitions and sentences).
         """
-        records: dict[str, dict[str, Any]] = {}
-
-        with (
-            gzip.open(input_path, "rt", encoding="utf-8") as file,
-            tqdm(
-                desc="Extracting",
-                unit=" lines",
-            ) as pbar,
-        ):
-            for line in file:
-                lemma_entry: dict[str, Any] = json.loads(line)
-
-                language: str | None = lemma_entry.get("lang_code") or lemma_entry.get(
-                    "lang"
-                )
-                if language and language.lower() in ("en", "english"):
-                    lemma: str | None = lemma_entry.get("word")
-                    if lemma:
-                        lemma = lemma.strip()
-
-                        pos_tag: str | None = lemma_entry.get("pos")
-                        if (
-                            self._allowed_pos_tags is None
-                            or pos_tag in self._allowed_pos_tags
-                        ):
-                            senses: list[Sense] = self._extract_senses(
-                                lemma_entry.get("senses", []),
-                            )
-
-                            if senses and any(sense.sentences for sense in senses):
-                                record_id: str = str(
-                                    uuid.uuid5(
-                                        uuid.NAMESPACE_DNS,
-                                        f"{lemma}|{pos_tag}|{'|'.join(sense.definition.lower() for sense in [sense for sense in senses if sense.sentences])}",
-                                    )
-                                )
-
-                                translations: dict[str, dict[str, list[str]]] = (
-                                    self._extract_translations(
-                                        lemma_entry.get("translations", []),
-                                    )
-                                )
-
-                                record: dict[str, Any] = {
-                                    "lemma": lemma,
-                                    "pos": pos_tag,
-                                    "senses": senses,
-                                    "translations": translations,
-                                }
-
-                                if record_id in records:
-                                    self._merge_records(records[record_id], record)
-                                else:
-                                    records[record_id] = record
-
-                pbar.update(1)
-
         lemmas: list[dict[str, Any]] = [
-            {"id": record_id, **record} for record_id, record in records.items()
+            {
+                "id": record_id,
+                "lemma": record["lemma"],
+                "pos": record["pos"],
+                "senses": record["senses"],
+            }
+            for record_id, record in self._extract_records().items()
+            if any(sense.sentences for sense in record["senses"])
         ]
 
-        sentences: list[tuple[str, Sentence]] = [
-            (lemma["lemma"].lower(), sentence)
+        sentences: list[Sentence] = [
+            sentence
             for lemma in lemmas
             for sense in lemma["senses"]
             for sentence in sense.sentences
         ]
 
-        for sentence_doc, lemma_doc, (_, sentence) in tqdm(
-            zip(
+        docs: list[Doc] = list(
+            tqdm(
                 self._nlp.pipe(
-                    (sentence.sentence for _, sentence in sentences),
+                    [sentence.sentence for sentence in sentences]
+                    + [
+                        lemma["lemma"].lower()
+                        for lemma in lemmas
+                        for sense in lemma["senses"]
+                        for _ in sense.sentences
+                    ],
                     batch_size=batch_size,
+                    n_process=n_process,
                 ),
-                self._nlp.pipe(
-                    (lemma for lemma, _ in sentences),
-                    batch_size=batch_size,
-                ),
-                sentences,
-            ),
+                desc="Processing with spaCy",
+                total=len(sentences) * 2,
+                unit=" doc",
+            )
+        )
+
+        for sentence_doc, lemma_doc, sentence in tqdm(
+            zip(docs[: len(sentences)], docs[len(sentences) :], sentences),
             desc="Finding word offsets",
             total=len(sentences),
             unit=" lemma",
@@ -404,153 +452,19 @@ class WiktextractProcessor(Processor):
 
         return lemmas
 
-    @staticmethod
-    def _safe_load(
-        string: str,
-    ) -> dict[str, Any]:
-        """
-        Safely load a JSON string, returning an empty dictionary if parsing fails.
-
-        Args:
-            string (str): The JSON string to parse.
-
-        Returns:
-            dict[str, Any]: The parsed JSON object, or an empty dictionary if parsing fails.
-        """
-        try:
-            return json.loads(string)
-        except json.JSONDecodeError:
-            return {}
-
-    def _build_mappings(
+    def extract_translations(
         self,
-        mappings_path: Path,
-    ) -> dict[str, dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
-        Build a mapping dictionary from the mappings JSONL file.
-
-        Args:
-            mappings_path (Path): Path to the mappings JSONL file.
+        Extract lemmas, their parts of speech, and their translations from the Wiktextract JSONL file.
 
         Returns:
-            dict[str, dict[str, str]]: A dictionary mapping lemma IDs to their corresponding sense-to-translation mappings.
+            list[dict[str, Any]]: A list of dictionaries, each containing a lemma, its part of speech, and a list of its translations (mapped by sense definitions and languages).
         """
-        mappings: dict[str, dict[str, str]] = {}
-
-        with mappings_path.open(encoding="utf-8") as file:
-            for line in file:
-                entry = self._safe_load(line)
-                if not entry:
-                    continue
-
-                entry_id: str = entry.get("id", "")
-
-                if entry_id in mappings:
-                    mappings[entry_id] = {}
-                    continue
-
-                raw_mapping: dict[str, str] | None = entry.get("mapping")
-                if isinstance(raw_mapping, dict):
-                    mappings.setdefault(entry_id, raw_mapping)
-
-        return mappings
-
-    def associate_translations(
-        self,
-        input_path: Path,
-        mappings_path: Path,
-    ) -> Generator[dict[str, Any], None, None]:
-        """
-        Associate translations with senses based on the provided mappings.
-
-        Args:
-            input_path (Path): Path to the Wiktextract JSONL file.
-            mappings_path (Path): Path to the mappings JSONL file.
-
-        Returns:
-            Generator[dict[str, Any], None, None]: Generator yielding lemmas with associated translations.
-        """
-        mappings: dict[str, dict[str, str]] = self._build_mappings(
-            mappings_path,
-        )
-
-        with (
-            input_path.open(encoding="utf-8") as file,
-            tqdm(
-                desc="Associating",
-                unit=" lines",
-            ) as pbar,
-        ):
-            for line in file:
-                input_entry: dict[str, Any] = self._safe_load(line)
-                if not input_entry:
-                    pbar.update(1)
-                    continue
-
-                record_id: str = input_entry.get("id", "")
-
-                lemma: str = input_entry.get("lemma", "")
-                pos: str = input_entry.get("pos", "")
-
-                translation_map: dict[str, dict[str, list[str]]] = input_entry.get(
-                    "translations", {}
-                )
-
-                translation_keys: list[str] = [
-                    key for key in translation_map.keys() if isinstance(key, str)
-                ]
-
-                mapping: dict[str, str] = (
-                    mappings.get(record_id, {}) if mappings else {}
-                )
-
-                senses: list[dict[str, Any]] = []
-
-                for i, sense in enumerate(input_entry.get("senses", []), start=1):
-                    if not sense.get("sentences", []):
-                        continue
-
-                    translations: dict[str, list[str]] = {}
-
-                    mapped: str | None = mapping.get(f"F{i}")
-
-                    raw_translations: dict[str, list[str]] | None = None
-                    if mapped and mapped.startswith("S"):
-                        try:
-                            index: int = int(mapped[1:]) - 1
-                            if 0 <= index < len(translation_keys):
-                                raw_translations = translation_map.get(
-                                    translation_keys[index]
-                                )
-                        except ValueError:
-                            pass
-
-                    if raw_translations:
-                        for language, words in raw_translations.items():
-                            if not isinstance(words, list):
-                                continue
-
-                            translations.setdefault(language, [])
-                            for word in words:
-                                if word not in translations[language]:
-                                    translations[language].append(word)
-
-                    sense_entry: dict[str, Any] = {
-                        "sense_order": sense.get("sense_order"),
-                        "definition": sense.get("definition"),
-                        "sentences": sense.get("sentences"),
-                    }
-
-                    if translations:
-                        sense_entry["translations"] = translations
-
-                    senses.append(sense_entry)
-
-                yield {
-                    "id": record_id,
-                    "lemma": lemma,
-                    "pos": pos,
-                    "senses": senses,
-                }
-
-                pbar.update(1)
+        return [
+            {
+                "id": record_id,
+                "translations": record["translations"],
+            }
+            for record_id, record in self._extract_records().items()
+        ]

@@ -5,7 +5,8 @@ from pathlib import Path
 DEFAULT_CHUNK_SIZE: int = 1024 * 1024
 DEFAULT_TIMEOUT: int = 60
 
-DEFAULT_BATCH_SIZE: int = 1000
+DEFAULT_BATCH_SIZE: int = 1024
+DEFAULT_N_PROCESS: int = 4
 
 DEFAULT_BUFFER_SIZE: int = 1024 * 1024
 
@@ -18,11 +19,15 @@ DATA_DIR: Path = ROOT / "data"
 RAW_DIR: Path = DATA_DIR / "raw"
 
 COMPRESSED_WIKTEXTRACT_PATH: Path = RAW_DIR / "wiktextract.jsonl.gz"
-DEFAULT_MAPPINGS_PATH: Path = RAW_DIR / "mappings.jsonl"
+
+TRANSLATION_MAPPINGS_PATH: Path = RAW_DIR / "translation_mappings.jsonl"
+WORDNET_DEFINITIONS_MAPPINGS_PATH: Path = RAW_DIR / "wordnet_definitions_mappings.jsonl"
 
 INTERIM_DIR: Path = DATA_DIR / "interim"
 
-WIKTEXTRACT_PATH: Path = INTERIM_DIR / "wiktextract.jsonl"
+WIKTEXTRACT_LEMMAS_PATH: Path = INTERIM_DIR / "wiktextract_lemmas.jsonl"
+WIKTEXTRACT_TRANSLATIONS_PATH: Path = INTERIM_DIR / "wiktextract_translations.jsonl"
+WORDNET_PATH: Path = INTERIM_DIR / "wordnet.jsonl"
 
 PROCESSED_DIR: Path = DATA_DIR / "processed"
 
